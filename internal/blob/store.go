@@ -8,20 +8,26 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sync"
 )
 
 var digestPattern = regexp.MustCompile(`^[a-f0-9]{64}$`)
 var idPattern = regexp.MustCompile(`^[a-f0-9]{32}$`)
 
-type Store struct{ Root string }
+type Store struct {
+	Root string
+
+	uploadGuard sync.Mutex
+	uploadLocks map[string]*sync.Mutex
+}
 
 func Open(root string) (*Store, error) {
-	for _, dir := range []string{"objects", "staging", "renders"} {
+	for _, dir := range []string{"objects", "staging", "renders", "uploads"} {
 		if err := os.MkdirAll(filepath.Join(root, dir), 0700); err != nil {
 			return nil, err
 		}
 	}
-	return &Store{Root: root}, nil
+	return &Store{Root: root, uploadLocks: map[string]*sync.Mutex{}}, nil
 }
 func (s *Store) Object(digest string) (string, error) {
 	if !digestPattern.MatchString(digest) {

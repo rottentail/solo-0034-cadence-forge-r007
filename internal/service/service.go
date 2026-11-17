@@ -11,6 +11,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"sync"
 )
 
@@ -36,6 +37,12 @@ func New(c config.Config) (*Service, error) {
 		return nil, err
 	}
 	s := &Service{Store: st, Blobs: blobs, Probe: media.Prober{Binary: c.FFprobe}, Config: c, wake: make(chan struct{}, 1), active: map[string]context.CancelFunc{}}
+	if removed, err := blobs.SweepUploads(c.UploadTTL); err != nil {
+		st.Close()
+		return nil, err
+	} else if removed > 0 {
+		slog.Info("expired upload sessions reclaimed", "count", removed)
+	}
 	if err = st.Recover(); err != nil {
 		st.Close()
 		return nil, err

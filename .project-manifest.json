@@ -24,7 +24,7 @@
     },
     {
       "id": "objects",
-      "name": "内容寻址接收与产物提升",
+      "name": "内容寻址接收、可恢复分块会话与产物提升",
       "path": "internal/blob"
     },
     {
@@ -79,6 +79,27 @@
         "journal"
       ],
       "verification": "python3 scripts/workflow_check.py --workflow ingest"
+    },
+    {
+      "id": "resumable-ingest",
+      "name": "resumable-ingest",
+      "entry": "POST /forge/v1/uploads, PUT /uploads/{id}/chunks/{index}, POST /uploads/{id}/complete",
+      "success": "缺失分块补齐后整文件SHA-256与ffprobe通过，登记与一次性接收同身份的素材",
+      "failure": "未确认完整的会话不可剪辑；篡改分块、异字节占用、错误整文件摘要与放弃会话均拒绝且无素材登记",
+      "steps": [
+        "无身份分块会话只落uploads目录，不进journal与objects",
+        "同字节并发重传幂等汇合、异字节冲突拒绝，重启后按耐久标记只补缺失分块",
+        "complete整文件校验、硬链接提升与探测通过后才登记Source"
+      ],
+      "module_ids": [
+        "http",
+        "application",
+        "objects",
+        "media",
+        "domain",
+        "journal"
+      ],
+      "verification": "python3 scripts/workflow_check.py --workflow resumable-ingest"
     },
     {
       "id": "recipe-version",
@@ -443,10 +464,10 @@
       "snapshot_consistency"
     ],
     "evidence": {
-      "concurrency": "internal/service/worker.go:claim, completeLocked",
-      "recovery_rollback": "internal/journal/recovery.go:Recover",
+      "concurrency": "internal/service/worker.go:claim, completeLocked; internal/blob/upload.go:PutChunk same-index serialized idempotent replay",
+      "recovery_rollback": "internal/journal/recovery.go:Recover; internal/blob/upload.go:UploadStatus marker rebuild and SweepUploads",
       "time_semantics": "internal/timeline/plan.go:Build; internal/caption/map.go:Map",
-      "idempotency": "internal/service/submit.go:Submit",
+      "idempotency": "internal/service/submit.go:Submit; internal/blob/upload.go:PutChunk, CompleteUpload",
       "snapshot_consistency": "internal/service/submit.go:Submit; internal/journal/store.go:Update"
     }
   }

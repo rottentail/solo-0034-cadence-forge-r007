@@ -11,7 +11,7 @@ go build -trimpath -o bin/forged ./cmd/forged
 ./bin/forged
 ```
 
-默认监听 `127.0.0.1:8734`，数据根 `var/cadence-forge`。可以设置 `FORGE_ADDR`、`FORGE_ROOT`、`FORGE_WORKERS`（1..8，默认2）、`FFMPEG_BIN`、`FFPROBE_BIN`。同一数据根仅允许一个服务进程。服务作为受信任环境中的媒体后端运行，面向公网接入前应部署认证和网络边界。
+默认监听 `127.0.0.1:8734`，数据根 `var/cadence-forge`。可以设置 `FORGE_ADDR`、`FORGE_ROOT`、`FORGE_WORKERS`（1..8，默认2）、`FORGE_UPLOAD_TTL_HOURS`（1..720，默认24）、`FFMPEG_BIN`、`FFPROBE_BIN`。同一数据根仅允许一个服务进程。服务作为受信任环境中的媒体后端运行，面向公网接入前应部署认证和网络边界。
 
 使用现有媒体工具运行所有真实工作流：
 
@@ -31,6 +31,18 @@ python3 scripts/workflow_check.py --workflow all
 6. `GET /forge/v1/renders/{id}`：查看排队、运行、成功、失败或取消及尝试历史。
 7. `GET /forge/v1/renders/{id}/artifact`：下载检验通过的媒体；`?captions=1`下载字幕。`POST .../verify`重新核验；`GET .../bundle`返回媒体、字幕及冻结说明组成的ZIP。
 
+## 可恢复接收（分块上传）
+
+大文件或弱网下使用分块会话，网络恢复后只补缺失分块，而不是重传整个素材。会话本身**没有素材身份**：它只描述正在接收的字节，不出现在 `/state` 或 objects 中；只有整文件 SHA-256 与 ffprobe 都通过并写入 journal 后，才产生可被剪辑引用的 Source。分块看似齐全但内容未确认时，绝不会提前成为素材。
+
+1. `POST /forge/v1/uploads`：JSON 声明 `name`、`size`、`chunk_size`，可选整文件 `content_sha256` 与覆盖全部分块的 `chunk_sha256` 清单。返回随机会话 ID、分块数与全量 `missing`。
+2. `PUT /forge/v1/uploads/{id}/chunks/{index}`：请求体为该分块原始字节，服务器按声明偏移落盘并独立重算 SHA-256，返回最新 `received`/`missing`。同索引并发重传被串行化：字节相同则幂等汇合，字节不同则冲突拒绝，不会串改同一身份。
+3. `GET /forge/v1/uploads/{id}`：查看已收与缺失分块，上传者据此只补缺失内容；重启后视图由磁盘标记重建，依然真实。
+4. `POST /forge/v1/uploads/{id}/complete?name=...`：唯一提升门。校验全部分块、整文件大小与整文件 SHA-256，硬链接进内容寻址 objects，再 ffprobe 并登记 Source；同字节内容与一次性 `POST /sources` 汇合到同一素材 ID。该调用幂等：字节已提升但探测或登记失败时，重试直接复用已提升对象，无需重传任何分块。
+5. `DELETE /forge/v1/uploads/{id}`：放弃会话并删除其目录，放弃的会话不可能再被提升为素材。
+
+校验成本是分层选择的：每块仅做一次流式 SHA-256（随块确认、成本与块大小成正比），声明 `chunk_sha256` 时额外逐块比对清单；最终身份只在 complete 时做一次整文件顺序 SHA-256，避免为每个分块承担整文件重算。临时空间上，每个会话只有一个按源大小 truncate 的稀疏 `data` 文件（未写部分不占磁盘块）加一个在途分块临时文件，提升用**硬链接**共享 inode，因此不需要保存完整的第二份副本。默认保留 24 小时（`FORGE_UPLOAD_TTL_HOURS` 调整），启动时清扫超时未推进的会话以回收临时空间。
+
 ## 编辑与恢复
 
 `PUT /sheets/{id}`及`PUT /recipes/{id}`使用十进制修订号 `If-Match: 1`。本服务的该头为应用级修订约定，并非通用HTTP条件请求实现。保存只追加历史，过期写入409。输入中的服务管理ID与修订由服务生成。
@@ -45,7 +57,7 @@ python3 scripts/workflow_check.py --workflow all
 
 ## 支持范围与限制
 
-单素材最多64 MiB、约120秒、3840×2160和8声道。剪辑最多32段、120秒、500条字幕，段长至少100ms；输出MP4/H.264/AAC或WAV/16位PCM，采样率44.1或48kHz。MP4要求每段有视频；无声视频生成对应静音。WAV要求每段有声音。视频保持完整画面并留边，统一像素比例与帧率，声音统一立体声。归一化为单遍响度滤镜，不保证任何短片都精确达到目标值。
+单素材最多64 MiB、约120秒、3840×2160和8声道。分块接收的单块为1 KiB..8 MiB、单次上传最多10000块；剪辑最多32段、120秒、500条字幕，段长至少100ms；输出MP4/H.264/AAC或WAV/16位PCM，采样率44.1或48kHz。MP4要求每段有视频；无声视频生成对应静音。WAV要求每段有声音。视频保持完整画面并留边，统一像素比例与帧率，声音统一立体声。归一化为单遍响度滤镜，不保证任何短片都精确达到目标值。
 
 时长基准为毫秒，编码后的帧与采样可能有容差。检验检查流、尺寸、采样率、时长与摘要，不代表内容正确、逐帧同步或主观质量已通过人工审片。禁止容器中的远程协议与非白名单封装，但媒体进程仍需要部署侧隔离。
 

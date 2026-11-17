@@ -18,6 +18,11 @@
       "timeout_seconds": 120
     },
     {
+      "workflow_id": "resumable-ingest",
+      "command": "python3 scripts/workflow_check.py --workflow resumable-ingest",
+      "timeout_seconds": 180
+    },
+    {
       "workflow_id": "recipe-version",
       "command": "python3 scripts/workflow_check.py --workflow recipe-version",
       "timeout_seconds": 120
